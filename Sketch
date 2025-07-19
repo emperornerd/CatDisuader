@@ -1,0 +1,136 @@
+// === CONFIGURATION ===
+const unsigned long alarmDuration = 5000;          // Alarm duration in milliseconds
+const unsigned long cooldownDelay = 1000;          // Cooldown after alarm (must wait for PIR to go LOW)
+const unsigned long greenFlashInterval = 60000;    // 1 minute interval for green LED flash
+const unsigned long greenFlashDuration = 200;      // Duration of green LED flash in ms
+const unsigned long blinkDuration = 200;           // Duration for blink on/off
+const unsigned long armingDelayDuration = 3000;    // 3 seconds arming delay to avoid false triggers
+
+// === PIN DEFINITIONS ===
+const int pirPin = 2;
+const int activeBuzzerPin = 9;
+const int redLed = 6;
+const int greenLed = 7;
+const int buttonPin = 4;
+
+// === STATE VARIABLES ===
+bool systemOn = true;
+bool buttonState = HIGH;
+bool lastButtonState = HIGH;
+bool lastPirState = LOW;
+unsigned long lastDebounceTime = 0;
+const unsigned long debounceDelay = 50;
+
+unsigned long lastGreenFlashTime = 0;
+unsigned long armingDelayStart = 0;
+
+void beep(int duration) {
+  digitalWrite(activeBuzzerPin, HIGH);
+  delay(duration);
+  digitalWrite(activeBuzzerPin, LOW);
+}
+
+void blinkLed(int pin, int times) {
+  for (int i = 0; i < times; i++) {
+    digitalWrite(pin, HIGH);
+    delay(blinkDuration);
+    digitalWrite(pin, LOW);
+    delay(blinkDuration);
+  }
+}
+
+void setup() {
+  Serial.begin(9600);
+
+  pinMode(pirPin, INPUT);
+  pinMode(activeBuzzerPin, OUTPUT);
+  pinMode(redLed, OUTPUT);
+  pinMode(greenLed, OUTPUT);
+  pinMode(buttonPin, INPUT_PULLUP);
+
+  digitalWrite(redLed, LOW);
+  digitalWrite(activeBuzzerPin, LOW);
+  digitalWrite(greenLed, LOW);
+
+  // Blink green LED 3 times on boot
+  blinkLed(greenLed, 3);
+
+  // Start 3-second arming delay to avoid false triggers right after boot
+  armingDelayStart = millis();
+
+  Serial.println("⚙️ Serious Alarm System Ready (Active Buzzer)");
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  int reading = digitalRead(buttonPin);
+
+  // Debounce the button
+  if (reading != lastButtonState) {
+    lastDebounceTime = now;
+  }
+
+  if ((now - lastDebounceTime) > debounceDelay) {
+    if (reading != buttonState) {
+      buttonState = reading;
+      if (buttonState == LOW) {
+        systemOn = !systemOn;
+        Serial.print("System toggled: ");
+        Serial.println(systemOn ? "ON" : "OFF");
+
+        if (systemOn) {
+          // Arming: blink green LED 3 times + beep, then start 3 sec delay
+          blinkLed(greenLed, 3);
+          beep(100);
+          armingDelayStart = now;
+        } else {
+          // Disarming: blink red LED 3 times
+          blinkLed(redLed, 3);
+        }
+      }
+    }
+  }
+
+  lastButtonState = reading;
+
+  // Flash green LED once every minute briefly, only if system is ON and not in arming delay
+  if (systemOn && (now - armingDelayStart >= armingDelayDuration)) {
+    if (now - lastGreenFlashTime >= greenFlashInterval) {
+      digitalWrite(greenLed, HIGH);
+      delay(greenFlashDuration);
+      digitalWrite(greenLed, LOW);
+      lastGreenFlashTime = now;
+    }
+  }
+
+  // Alarm logic - only if system is ON and arming delay passed
+  bool pirState = digitalRead(pirPin);
+
+  if (systemOn && (now - armingDelayStart >= armingDelayDuration)) {
+    if (pirState == HIGH && lastPirState == LOW) {
+      Serial.println("⚠️ INTRUDER DETECTED ⚠️");
+
+      // Run alarm
+      digitalWrite(redLed, HIGH);
+      digitalWrite(activeBuzzerPin, HIGH);
+      delay(alarmDuration);
+      digitalWrite(activeBuzzerPin, LOW);
+      digitalWrite(redLed, LOW);
+
+      Serial.println("Alarm finished. Waiting for cooldown...");
+
+      // Wait for cooldown + PIR to reset
+      unsigned long cooldownStart = millis();
+      while (digitalRead(pirPin) == HIGH && (millis() - cooldownStart) < cooldownDelay) {
+        delay(50);
+      }
+
+      Serial.println("Cooldown complete. Ready for next motion.");
+    }
+  }
+
+  lastPirState = pirState;
+
+  delay(50);
+}
